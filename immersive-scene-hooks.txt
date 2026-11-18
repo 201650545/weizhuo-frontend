@@ -1,0 +1,41 @@
+// Sample-only rigid puppet gestures and seated-eye camera, no network/player identity changes.
+let sampleEmote=null,sampleLastEmote=null;
+const sampleRest=new Map();
+function triggerSampleEmote(index,kind){
+ if(!Number.isInteger(index)||index<0||index>=playerCount||!['nod','shake','chuckle','wave'].includes(kind))return false;
+ if(actors[index].body.userData.playGesture){sampleLastEmote={index,kind};return actors[index].body.userData.playGesture(kind,performance.now()/1000);}
+ if(sampleEmote)resetSamplePose(sampleEmote.index);
+ sampleEmote={index,kind,start:performance.now(),duration:kind==='chuckle'?1800:1400};sampleLastEmote={index,kind};return true;
+}
+function sampleRig(index){
+ if(sampleRest.has(index))return sampleRest.get(index);
+ const body=actors[index].body,head=body.getObjectByName('expressive-head'),left=body.getObjectByName('gesture-left'),right=body.getObjectByName('gesture-right');
+ const rig={body,head,left,right,bodyRotation:body.rotation.clone(),bodyY:body.position.y,headRotation:head.rotation.clone(),leftRotation:left.rotation.clone(),rightRotation:right.rotation.clone()};sampleRest.set(index,rig);return rig;
+}
+function resetSamplePose(index){const r=sampleRig(index);r.body.rotation.copy(r.bodyRotation);r.body.position.y=r.bodyY;r.head.rotation.copy(r.headRotation);r.left.rotation.copy(r.leftRotation);r.right.rotation.copy(r.rightRotation);}
+function sampleSeatSnapshot(){const project=name=>{const o=scene?.getObjectByName(name);if(!o)return null;const p=o.getWorldPosition(new THREE.Vector3()).project(camera);return {x:p.x,y:p.y,z:p.z};};const seat=window.__seatImmersion?.seat??0;const actorProjection=actors.filter(a=>a.index<playerCount&&a.index!==seat).map(a=>{const p=a.g.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0,1.45,0)).project(camera);return {index:a.index,x:p.x,y:p.y,z:p.z};});const floor=scene?.getObjectByName('floor-design-options');const selected=floor?.children.find(o=>o.visible);const probe=new THREE.Raycaster(new THREE.Vector3(3,4,0),new THREE.Vector3(0,-1,0));const floorHit=probe.intersectObjects([selected,scene?.getObjectByName('floor')].filter(Boolean),false)[0];return {floorVisibility:{selected:selected?.name,y:selected?.getWorldPosition(new THREE.Vector3()).y,firstSurface:floorHit?.object.name},castVisibility:actors.filter(a=>a.index<playerCount).map(a=>({index:a.index,seatVisible:a.g.visible,bodyVisible:a.body.visible})),verticalFov:camera?.fov,horizontalFov:THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov)/2)*camera.aspect)),actorProjection,windowProjection:{centre:project('circular-window'),moon:project('moon-outside-window')},enabled:!!window.__seatImmersion?.enabled,seat:window.__seatImmersion?.seat??0,cameraPosition:camera?.position.toArray(),ownVisible:!!actors[window.__seatImmersion?.seat??0]?.g.visible,activeEmote:sampleEmote?{index:sampleEmote.index,kind:sampleEmote.kind,elapsed:performance.now()-sampleEmote.start}:null,emotePose:sampleLastEmote?{head:sampleRig(sampleLastEmote.index).head.rotation.toArray().slice(0,3),bodyY:sampleRig(sampleLastEmote.index).body.position.y,right:sampleRig(sampleLastEmote.index).right.rotation.toArray().slice(0,3)}:null,lastEmote:sampleLastEmote};}
+function applySeatedSample(){
+ const cfg=window.__seatImmersion;
+  const shot=window.__chapelStudyCamera;
+  if(shot){camera.position.set(...shot.eye);camera.lookAt(...shot.target);camera.fov=shot.fov;camera.near=.045;camera.updateProjectionMatrix();camera.updateMatrixWorld();}
+ for(const a of actors)a.g.visible=a.index<playerCount&&(!window.__roomLobby?.active||a.index<window.__roomLobby.joined)&&!(cfg?.enabled&&a.index===cfg.seat);
+ if(cfg?.enabled){
+  const a=actors[Math.min(playerCount-1,Math.max(0,cfg.seat||0))],eye=a.g.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0,1.63,0));
+  camera.position.copy(eye);const center=new THREE.Vector3(0,1.46,0),dir=center.sub(eye).normalize();
+  const yaw=Number(cfg.yaw)||0,pitch=Number(cfg.pitch)||0;
+  dir.applyAxisAngle(new THREE.Vector3(0,1,0),yaw);const side=new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,1,0)).normalize();dir.applyAxisAngle(side,pitch);
+  camera.lookAt(eye.clone().addScaledVector(dir,3));const bounds=viewport.getBoundingClientRect();camera.aspect=bounds.width/Math.max(1,bounds.height);const fieldScale=THREE.MathUtils.clamp(Number(window.__roomFieldScale)||1,.75,1.25);camera.fov=THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(THREE.MathUtils.degToRad(78)/2)*fieldScale)); /* Natural vertical perspective; landscape reveals neighboring seats. */camera.near=.045;camera.updateProjectionMatrix();camera.updateMatrixWorld();
+  updateLampOcclusion();
+ }
+ if(sampleEmote){
+  const e=sampleEmote,r=sampleRig(e.index),t=Math.min(1,Math.max(0,(performance.now()-e.start)/e.duration)),env=Math.sin(Math.PI*t),wave=Math.sin(t*Math.PI*4);
+  resetSamplePose(e.index);
+  // Reduced motion uses a single gentle inclination, no shoulder shake.
+  if(reduced.matches){r.head.rotation.z+=.035*env;}
+  else if(e.kind==='nod'){r.head.rotation.x+=.13*wave*env;}
+  else if(e.kind==='shake'){r.head.rotation.y+=.18*wave*env;}
+  else if(e.kind==='chuckle'){r.head.rotation.z+=.08*env;r.head.rotation.x+=.07*env;r.body.rotation.x+=.035*env;r.body.position.y+=.012*Math.sin(t*Math.PI*8)*env;r.left.rotation.z-=.10*env;r.right.rotation.z+=.10*env;}
+  else if(e.kind==='wave'){r.right.rotation.z-=.35*env;r.right.rotation.x+=.10*wave*env;}
+  if(t>=1){resetSamplePose(e.index);sampleEmote=null;}
+ }
+}

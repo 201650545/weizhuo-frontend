@@ -1,0 +1,26 @@
+// Local-only development UI. No room API, identity credential or real vote is touched.
+const panel=document.createElement('section');panel.id='developer-panel';panel.className='developer-panel';
+const controls=[['roomHalf','阅读远景范围',3.9,5.6,.05],['activityHalf','讨论/票选范围',2.6,3.8,.05],['speakerHalf','发言中景范围',1.65,2.5,.05],['readElevation','阅读俯角',.45,1.05,.01],['speakerElevation','发言俯角',.25,.65,.01],['transitionMs','镜头过渡毫秒',250,2500,50],['roomBrightness','房间亮度',.5,1.5,.05],['spotlight','发言聚光强度',0,30,1],['gesture','人物动作速度',0,1,.1]];
+panel.innerHTML=`<style>.developer-panel{margin-top:24px;border:1px solid #a79770;border-radius:10px;background:#17231f;padding:18px;color:#e5d8b8;max-width:620px}.developer-panel h2{font:24px SimSun,serif;margin:0 0 8px}.developer-panel p{font-size:13px}.dev-actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.developer-panel button{min-height:44px;padding:8px;font:13px 'Microsoft YaHei';color:#eadfc8;background:#293d32;border:1px solid #899275;border-radius:5px;cursor:pointer}.developer-panel button:hover{background:#3b5343}.developer-panel label{display:block;font-size:13px;margin:10px 0}.developer-panel input[type=range]{width:100%;accent-color:#d8b86c}.developer-panel output{float:right;color:#f2cb80}.developer-panel pre{font-size:12px;white-space:pre-wrap;line-height:1.7;padding:10px;background:#0b1612;border-radius:6px}.dev-readiness{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.developer-panel details{margin-top:14px}.developer-panel summary{cursor:pointer;min-height:36px}</style>
+<h2>开发面板 · 无需六人入场</h2><p>这是隔离的本地样稿状态。按钮只驱动演示，不发送真实发言/投票、不改私稿；参数刷新后复原。</p>
+<div class="dev-actions"><button data-dev="all-read">① 模拟全员已读 → 发言</button><button data-dev="finish-speaking">② 发言结束 → 回房间</button><button data-dev="discuss">③ 进入围桌讨论</button><button data-dev="finish-discussion">讨论结束 → 回房间</button><button data-dev="vote">④ 进入票选镜头</button><button data-dev="finish-vote">票选完毕 → 回房间</button><button data-dev="next">下一位发言</button><button data-dev="reset">重置阅读与流程</button></div>
+<details open><summary>阅读确认 · 按人数自动更新</summary><div class="dev-readiness"></div></details>
+<details><summary>镜头、灯光、动画参数 · 即改即看</summary>${controls.map(([k,n,min,max,step])=>`<label>${n}<output data-value="${k}"></output><input aria-label="${n}" data-param="${k}" type="range" min="${min}" max="${max}" step="${step}"></label>`).join('')}<button data-dev="parameters-reset">恢复默认参数</button></details>
+<details><summary>当前状态 / 导出调试参数</summary><pre id="dev-state"></pre><button data-dev="export">下载参数 JSON</button><p id="dev-error" role="status"></p></details>`;
+{const intro=document.querySelector('.intro');if(intro)intro.append(panel)}
+const actions={
+ 'all-read':()=>deskPrototype.simulateAllRead(),
+ 'finish-speaking':()=>deskPrototype.returnRoom('发言完毕，房间远景'),
+ discuss:()=>deskPrototype.setStage('discuss'),
+ 'finish-discussion':()=>deskPrototype.returnRoom('讨论结束，房间远景'),
+ vote:()=>deskPrototype.setStage('accuse'),
+ 'finish-vote':()=>deskPrototype.returnRoom('票选完毕，房间远景'),
+ next:()=>deskPrototype.setSpeaker((deskPrototype.state().speakerRole+1)%deskPrototype.state().playerCount),
+ reset:()=>deskPrototype.resetDemo(),
+ 'parameters-reset':()=>desk3D.resetParameters(),
+ export:()=>{const blob=new Blob([JSON.stringify({parameters:desk3D.snapshot().settings,state:deskPrototype.state()},null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download='末班汽笛-开发参数.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+};
+function sync(){if(!window.desk3D||!window.deskPrototype)return;const state=deskPrototype.state(),scene=desk3D.snapshot();const list=panel.querySelector('.dev-readiness');if(list.children.length!==state.playerCount)list.innerHTML=state.cast.map((n,i)=>`<label><input type="checkbox" data-ready="${i}">${i+1} ${n}</label>`).join('');panel.querySelectorAll('[data-ready]').forEach(e=>e.checked=state.readiness[+e.dataset.ready]);panel.querySelectorAll('[data-param]').forEach(e=>{if(document.activeElement!==e)e.value=scene.settings[e.dataset.param];panel.querySelector('[data-value="'+e.dataset.param+'"]').textContent=String(scene.settings[e.dataset.param]);});panel.querySelector('#dev-state').textContent=JSON.stringify({phase:state.stage,privateRole:state.currentRole+1,speaker:state.speakerRole+1,ready:state.readiness.filter(Boolean).length+'/'+state.playerCount,event:state.lifecycleEvent,roomVisibility:+scene.environment.visibility.toFixed(2),cameraFocus:+scene.camera.focus.toFixed(2),rotating:scene.turntable.rotating,room:scene.environment.name},null,2);}
+panel.addEventListener('click',e=>{const b=e.target.closest('[data-dev]');if(!b)return;try{actions[b.dataset.dev]();panel.querySelector('#dev-error').textContent='';sync();}catch(err){panel.querySelector('#dev-error').textContent=err.message;}});
+panel.addEventListener('input',e=>{try{if(e.target.dataset.param)desk3D.configure({[e.target.dataset.param]:Number(e.target.value)});if(e.target.dataset.ready!==undefined)deskPrototype.markReady(+e.target.dataset.ready,e.target.checked);sync();}catch(err){panel.querySelector('#dev-error').textContent=err.message;}});
+window.addEventListener('desk-state',sync);setInterval(sync,500);sync();
