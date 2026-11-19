@@ -1,8 +1,73 @@
-import { buildFloorOrnaments } from './floor-ornaments.js';
+let inspectionHidden=[],inspectionFill=null,inspectionFillTarget=null;
+function restoreRefinedInspection(){for(const [obj,visible]of inspectionHidden)obj.visible=visible;inspectionHidden=[];if(inspectionFill)inspectionFill.visible=false;}
+function refinedScreenBounds(){const b=new THREE.Box3().setFromObject(actors[0].body),r=viewport.getBoundingClientRect(),pts=[];for(const x of [b.min.x,b.max.x])for(const y of [b.min.y,b.max.y])for(const z of [b.min.z,b.max.z]){const p=new THREE.Vector3(x,y,z).project(camera);pts.push({x:(p.x+1)*r.width/2,y:(1-p.y)*r.height/2});}return {left:Math.min(...pts.map(p=>p.x)),right:Math.max(...pts.map(p=>p.x)),top:Math.min(...pts.map(p=>p.y)),bottom:Math.max(...pts.map(p=>p.y))};}
+function applyRefinedInspection(){
+ const cfg=window.__puppetInspection;
+ // Presentation mode is reversible; it uses the same scene and same mesh.
+ if(!cfg?.enabled)return;
+ const preserve=(obj,visible)=>{inspectionHidden.push([obj,obj.visible]);obj.visible=visible;};
+ preserve(roomEnvironment.root,false);
+ for(const a of actors)preserve(a.g,a.index===0);
+ for(const child of turntable.children)if(child!==actors[0].g)preserve(child,false);
+ const outside=scene.getObjectByName('outside-dark-floor');if(outside)preserve(outside,false);
+ actors[0].g.visible=true;actors[0].g.updateMatrixWorld(true);
+ const angle=Number(cfg.angle)||0,close=cfg.close===true;
+ const focusPoint=actors[0].g.localToWorld(new THREE.Vector3(0,close?1.65:.80,0));
+ const camLocal=new THREE.Vector3(Math.sin(angle)*(close?.85:3.8),close?1.67:1.42,-Math.cos(angle)*(close?.85:3.8));
+ if(!inspectionFill){inspectionFillTarget=new THREE.Object3D();scene.add(inspectionFillTarget);inspectionFill=new THREE.SpotLight(0xffdfb2,8,4.5,.75,.9,2);inspectionFill.name='inspection-only-soft-fill';inspectionFill.target=inspectionFillTarget;scene.add(inspectionFill);}
+ inspectionFill.visible=true;inspectionFill.position.copy(actors[0].g.localToWorld(camLocal.clone().add(new THREE.Vector3(-.35,.35,0))));inspectionFillTarget.position.copy(focusPoint);
+ camera.position.copy(actors[0].g.localToWorld(camLocal));camera.lookAt(focusPoint);
+ const b=viewport.getBoundingClientRect();camera.aspect=b.width/Math.max(1,b.height);camera.fov=close?37:52;camera.near=.035;camera.updateProjectionMatrix();camera.updateMatrixWorld();
+}
+
+// Sample-only rigid puppet gestures and seated-eye camera, no network/player identity changes.
+let sampleEmote=null,sampleLastEmote=null;
+const sampleRest=new Map();
+function triggerSampleEmote(index,kind){
+ if(!Number.isInteger(index)||index<0||index>=playerCount||!['nod','shake','chuckle','wave'].includes(kind))return false;
+ if(actors[index].body.userData.playGesture){sampleLastEmote={index,kind};return actors[index].body.userData.playGesture(kind,performance.now()/1000);}
+ if(sampleEmote)resetSamplePose(sampleEmote.index);
+ sampleEmote={index,kind,start:performance.now(),duration:kind==='chuckle'?1800:1400};sampleLastEmote={index,kind};return true;
+}
+function sampleRig(index){
+ if(sampleRest.has(index))return sampleRest.get(index);
+ const body=actors[index].body,head=body.getObjectByName('expressive-head'),left=body.getObjectByName('gesture-left'),right=body.getObjectByName('gesture-right');
+ const rig={body,head,left,right,bodyRotation:body.rotation.clone(),bodyY:body.position.y,headRotation:head.rotation.clone(),leftRotation:left.rotation.clone(),rightRotation:right.rotation.clone()};sampleRest.set(index,rig);return rig;
+}
+function resetSamplePose(index){const r=sampleRig(index);r.body.rotation.copy(r.bodyRotation);r.body.position.y=r.bodyY;r.head.rotation.copy(r.headRotation);r.left.rotation.copy(r.leftRotation);r.right.rotation.copy(r.rightRotation);}
+function sampleSeatSnapshot(){const project=name=>{const o=scene?.getObjectByName(name);if(!o)return null;const p=o.getWorldPosition(new THREE.Vector3()).project(camera);return {x:p.x,y:p.y,z:p.z};};const seat=window.__seatImmersion?.seat??0;const actorProjection=actors.filter(a=>a.index<playerCount&&a.index!==seat).map(a=>{const p=a.g.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0,1.45,0)).project(camera);return {index:a.index,x:p.x,y:p.y,z:p.z};});const floor=scene?.getObjectByName('floor-design-options');const selected=floor?.children.find(o=>o.visible);const probe=new THREE.Raycaster(new THREE.Vector3(3,4,0),new THREE.Vector3(0,-1,0));const floorHit=probe.intersectObjects([selected,scene?.getObjectByName('floor')].filter(Boolean),false)[0];return {floorVisibility:{selected:selected?.name,y:selected?.getWorldPosition(new THREE.Vector3()).y,firstSurface:floorHit?.object.name},castVisibility:actors.filter(a=>a.index<playerCount).map(a=>({index:a.index,seatVisible:a.g.visible,bodyVisible:a.body.visible})),verticalFov:camera?.fov,horizontalFov:THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov)/2)*camera.aspect)),actorProjection,windowProjection:{centre:project('circular-window'),moon:project('moon-outside-window')},enabled:!!window.__seatImmersion?.enabled,seat:window.__seatImmersion?.seat??0,cameraPosition:camera?.position.toArray(),ownVisible:!!actors[window.__seatImmersion?.seat??0]?.g.visible,activeEmote:sampleEmote?{index:sampleEmote.index,kind:sampleEmote.kind,elapsed:performance.now()-sampleEmote.start}:null,emotePose:sampleLastEmote?{head:sampleRig(sampleLastEmote.index).head.rotation.toArray().slice(0,3),bodyY:sampleRig(sampleLastEmote.index).body.position.y,right:sampleRig(sampleLastEmote.index).right.rotation.toArray().slice(0,3)}:null,lastEmote:sampleLastEmote};}
+function applySeatedSample(){
+ const cfg=window.__seatImmersion;
+  const shot=window.__chapelStudyCamera;
+  if(shot){camera.position.set(...shot.eye);camera.lookAt(...shot.target);camera.fov=shot.fov;camera.near=.045;camera.updateProjectionMatrix();camera.updateMatrixWorld();}
+ for(const a of actors)a.g.visible=a.index<playerCount&&(!window.__roomLobby?.active||a.index<window.__roomLobby.joined)&&!(cfg?.enabled&&a.index===cfg.seat);
+ if(cfg?.enabled){
+  const a=actors[Math.min(playerCount-1,Math.max(0,cfg.seat||0))],eye=a.g.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0,1.63,0));
+  camera.position.copy(eye);const center=new THREE.Vector3(0,1.46,0),dir=center.sub(eye).normalize();
+  const yaw=Number(cfg.yaw)||0,pitch=Number(cfg.pitch)||0;
+  dir.applyAxisAngle(new THREE.Vector3(0,1,0),yaw);const side=new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,1,0)).normalize();dir.applyAxisAngle(side,pitch);
+  camera.lookAt(eye.clone().addScaledVector(dir,3));const bounds=viewport.getBoundingClientRect();camera.aspect=bounds.width/Math.max(1,bounds.height);const fieldScale=THREE.MathUtils.clamp(Number(window.__roomFieldScale)||1,.75,1.25);camera.fov=THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(THREE.MathUtils.degToRad(78)/2)*fieldScale)); /* Natural vertical perspective; landscape reveals neighboring seats. */camera.near=.045;camera.updateProjectionMatrix();camera.updateMatrixWorld();
+  updateLampOcclusion();
+ }
+ if(sampleEmote){
+  const e=sampleEmote,r=sampleRig(e.index),t=Math.min(1,Math.max(0,(performance.now()-e.start)/e.duration)),env=Math.sin(Math.PI*t),wave=Math.sin(t*Math.PI*4);
+  resetSamplePose(e.index);
+  // Reduced motion uses a single gentle inclination, no shoulder shake.
+  if(reduced.matches){r.head.rotation.z+=.035*env;}
+  else if(e.kind==='nod'){r.head.rotation.x+=.13*wave*env;}
+  else if(e.kind==='shake'){r.head.rotation.y+=.18*wave*env;}
+  else if(e.kind==='chuckle'){r.head.rotation.z+=.08*env;r.head.rotation.x+=.07*env;r.body.rotation.x+=.035*env;r.body.position.y+=.012*Math.sin(t*Math.PI*8)*env;r.left.rotation.z-=.10*env;r.right.rotation.z+=.10*env;}
+  else if(e.kind==='wave'){r.right.rotation.z-=.35*env;r.right.rotation.x+=.10*wave*env;}
+  if(t>=1){resetSamplePose(e.index);sampleEmote=null;}
+ }
+}
+
+import { buildChapelArchitecture, buildFloorOrnaments } from './chapel-architecture.js';
 import * as THREE from './vendor/three.module.js';
-import { buildPuppet } from './puppet-model.js';
-import { buildCathedralRoom } from './cathedral-room3d.js';
-import { loadChapelDrafts, applyDraftSurface, loadChapel4kTextures } from './chapel-draft-materials.js';
+import { createLightingRig } from './lighting-rig.js';
+import { constrainCamera } from './camera-controller.js';
+import { buildPuppet } from './puppet-builder.js';
+import { loadChapelDrafts, applyDraftSurface, loadChapel4kTextures } from './scene-materials.js';
 import { createSpeakerMotion, speakerMotionAt } from './spin-motion.mjs';
 
 // Metres, y-up. A single physical turntable owns the lit floor, table, chairs and cast.
@@ -102,13 +167,10 @@ function modelActor(index){
 }
 function buildScene(){
  const s=new THREE.Scene();s.background=new THREE.Color(0x020304);s.fog=new THREE.Fog(0x020304,16,25);
-  turntable=new THREE.Group();turntable.name='lit-turntable';s.add(turntable);roomEnvironment=buildCathedralRoom();s.add(roomEnvironment.root);
+  turntable=new THREE.Group();turntable.name='lit-turntable';s.add(turntable);roomEnvironment=buildChapelArchitecture();s.add(roomEnvironment.root);
   // Only the suspended fixture is eligible for occlusion suppression; walls and roof stay closed.
   lampParts=[];roomEnvironment.root.traverse(o=>{if(o.isMesh&&LAMP_PARTS.includes(o.name))lampParts.push(o);});
- s.add(new THREE.HemisphereLight(0xc5d6e3,0x273339,1.65));
- s.add(new THREE.AmbientLight(0xb9cad4,.55));
- const key=new THREE.DirectionalLight(0xd7e2e7,2.8);key.position.set(-3,7,4);key.castShadow=true;key.shadow.mapSize.set(1024,1024);key.shadow.camera.left=-3.2;key.shadow.camera.right=3.2;key.shadow.camera.top=3.2;key.shadow.camera.bottom=-3.2;key.shadow.normalBias=.008;key.shadow.bias=-.00008;key.shadow.radius=3;s.add(key);
- const rim=new THREE.DirectionalLight(0x8ba8b5,1.1);rim.position.set(3,4,-4);s.add(rim);
+ createLightingRig(s,turntable);
    // Outside the circle is unlit black, not a second rotating landscape.
   const floor=box(s,'outside-dark-floor',30,.08,30,new THREE.MeshBasicMaterial({color:0x020304}),0,-.09,0);floor.castShadow=false;
   const disk=cylinder(turntable,'illuminated-floor',STAGE_RADIUS,STAGE_RADIUS,.05,material(0x414c50),0,-.04,0,128);disk.castShadow=false;
@@ -215,9 +277,7 @@ function updateCamera(){
     camera.position.copy(orbitTarget).add(orbitOffset);
    camera.lookAt(0,2.8+lift*11.8,-2.5-lift*3);
    const roomBounds=roomEnvironment.snapshot().bounds,margin=.45;
-    camera.position.x=THREE.MathUtils.clamp(camera.position.x,-roomBounds.halfWidth+margin,roomBounds.halfWidth-margin);
-    camera.position.z=THREE.MathUtils.clamp(camera.position.z,-roomBounds.halfDepth+margin,roomBounds.halfDepth-margin);
-    camera.position.y=THREE.MathUtils.clamp(camera.position.y,1.1,roomBounds.ceiling-margin);
+    constrainCamera(camera.position,roomBounds,margin);
     camera.lookAt(orbitTarget);camera.fov=82;camera.updateProjectionMatrix();camera.updateMatrixWorld();
   }
   cameraPath.push({t:performance.now(),...cameraState()});if(cameraPath.length>300)cameraPath.shift();
@@ -389,7 +449,7 @@ function updateLampOcclusion(){
  for(const m of lampParts)m.visible=!blocked;
  lampOcclusionSuppressed=blocked;
 }
-function renderFrame(){if(!ready)return;floorGlow=THREE.MathUtils.lerp(floorGlow,spin?.speaker!==null&&!!spin?.travel?.valueOf()?1:0,.045);floorInlayMaterial.emissiveIntensity=.12+.22*floorGlow;const designs=scene.getObjectByName('floor-design-options');for(const g of designs.children){g.visible=g.name===(window.__floorPattern||'rose');g.material.color.copy(floorInlayMaterial.color);g.material.emissive.copy(floorInlayMaterial.emissive);g.material.emissiveIntensity=floorInlayMaterial.emissiveIntensity;}if(window.__floorPatternColor){floorInlayMaterial.color.set(window.__floorPatternColor);floorInlayMaterial.emissive.set(window.__floorPatternColor);}for(const a of actors){const lobby=window.__roomLobby; a.body.visible=!lobby?.active || a.index<lobby.joined; if(lobby?.active&&Array.isArray(lobby.roles)){const roleIndex=lobby.roles[a.index];const shades=[0xd9b580,0x8d9ba2,0xb19296,0x8d9d7d,0xb69b81];a.body.traverse(o=>{if(!o.isMesh||!o.name.includes('torso'))return;for(const m of (Array.isArray(o.material)?o.material:[o.material]))if(m.userData.focusBase&&roleIndex!=null)m.userData.focusBase.setHex(shades[roleIndex%shades.length]);});}const dim=1; /* Moonlight and bounce determine contrast, preserving material detail. */for(const m of a.localMaterials)m.color.copy(m.userData.focusBase).multiplyScalar(dim);}roomEnvironment.setVisibility(roomMix);scene.getObjectByName('activity-ballot').visible=stage==='accuse';renderer.toneMappingExposure=1.25*settings.roomBrightness*THREE.MathUtils.clamp(Number(window.__sceneBrightnessPercent??50)/50,.02,2);scene.updateMatrixWorld(true);updateCamera();updateLampOcclusion();positionUI();renderer.render(scene,camera);frame++;}
+function renderFrame(){if(!ready)return;restoreRefinedInspection();floorGlow=THREE.MathUtils.lerp(floorGlow,spin?.speaker!==null&&!!spin?.travel?.valueOf()?1:0,.045);floorInlayMaterial.emissiveIntensity=.12+.22*floorGlow;const designs=scene.getObjectByName('floor-design-options');for(const g of designs.children){g.visible=g.name===(window.__floorPattern||'rose');g.material.color.copy(floorInlayMaterial.color);g.material.emissive.copy(floorInlayMaterial.emissive);g.material.emissiveIntensity=floorInlayMaterial.emissiveIntensity;}if(window.__floorPatternColor){floorInlayMaterial.color.set(window.__floorPatternColor);floorInlayMaterial.emissive.set(window.__floorPatternColor);}for(const a of actors){const lobby=window.__roomLobby; a.body.visible=!lobby?.active || a.index<lobby.joined; if(lobby?.active&&Array.isArray(lobby.roles)){const roleIndex=lobby.roles[a.index];const shades=[0xd9b580,0x8d9ba2,0xb19296,0x8d9d7d,0xb69b81];a.body.traverse(o=>{if(!o.isMesh||!o.name.includes('torso'))return;for(const m of (Array.isArray(o.material)?o.material:[o.material]))if(m.userData.focusBase&&roleIndex!=null)m.userData.focusBase.setHex(shades[roleIndex%shades.length]);});}const dim=1; /* Moonlight and bounce determine contrast, preserving material detail. */for(const m of a.localMaterials)m.color.copy(m.userData.focusBase).multiplyScalar(dim);}roomEnvironment.setVisibility(roomMix);scene.getObjectByName('activity-ballot').visible=stage==='accuse';renderer.toneMappingExposure=1.25*settings.roomBrightness*THREE.MathUtils.clamp(Number(window.__sceneBrightnessPercent??50)/50,.02,2);scene.updateMatrixWorld(true);updateCamera();updateLampOcclusion();if(!window.__seatImmersion?.enabled)positionUI();applySeatedSample();for(const actor of actors)actor.body.userData.tickRefined?.(performance.now()/1000);applyRefinedInspection();renderer.render(scene,camera);frame++;}
 let verdictMotion=null;
 function clearVerdictMotion(){if(!verdictMotion)return;const b=actors[verdictMotion.target].body;b.position.y=verdictMotion.y;b.rotation.z=verdictMotion.z;verdictMotion=null;}
 function startVerdictMotion(target,result){if(!Number.isInteger(target)||target<0||target>=playerCount||!['correct','wrong'].includes(result))throw Error('invalid verdict');clearVerdictMotion();const b=actors[target].body;verdictMotion={target,result,start:performance.now(),y:b.position.y,z:b.rotation.z};if(reduced.matches){b.position.y=verdictMotion.y+(result==='correct'?.22:0);b.rotation.z=verdictMotion.z+(result==='correct'?-.12:0);verdictMotion.finished=true;renderFrame();}}
@@ -404,7 +464,7 @@ function animate(now){
  if(spin){const elapsed=Math.max(0,now-spin.start),t=spin.duration?Math.min(1,elapsed/spin.duration):1;turntable.rotation.y=spin.motion?speakerMotionAt(spin.motion,elapsed):THREE.MathUtils.lerp(spin.from,spin.to,ease(t));spinTrace.push({id:spin.id,t:now,angle:turntable.rotation.y,travel:spin.travel,speaker:spin.speaker,phase:t,elapsed,decel:spin.decel??null,motion:spin.motion?{...spin.motion}:null,done:t>=1});if(spinTrace.length>600)spinTrace.shift();if(t>=1)spin=null;active=true;}
  if(stage==='turn'&&!reduced.matches){for(const a of actors)if(!verdictMotion||a.index!==verdictMotion.target)a.body.userData.animatePose?.(now/1000*settings.gesture,a.index===speakingRole&&!spin);active=true;}
  if(verdictMotion){const t=reduced.matches?1:Math.min(1,Math.max(0,(now-verdictMotion.start)/1200)),e=t*t*(3-2*t),b=actors[verdictMotion.target].body;b.position.y=verdictMotion.y+(verdictMotion.result==='correct'?.22*e:0);b.rotation.z=verdictMotion.z+(verdictMotion.result==='correct'?-.12*e:.16*Math.sin(Math.PI*e));if(t<1||!verdictMotion.finished){active=true;if(t>=1)verdictMotion.finished=true;}}
- if(active||now-last>200){renderFrame();last=now;}
+ if(active||sampleEmote||window.__seatImmersion?.enabled||window.__puppetInspection?.enabled||actors.some(a=>a.body.userData.gestureActive?.())||now-last>200){renderFrame();last=now;}
  requestAnimationFrame(animate);
 }
 
@@ -452,6 +512,6 @@ try{
   canvas.addEventListener('pointercancel',ev=>{pointers.delete(ev.pointerId);drag=null;});
   canvas.addEventListener('wheel',ev=>{if(stage==='turn')return;ev.preventDefault();beginExplore();exploreState.zoom=THREE.MathUtils.clamp(exploreState.zoom*(ev.deltaY>0?.92:1.08),EXPLORE_LIMITS.zoom[0],EXPLORE_LIMITS.zoom[1]);renderFrame();},{passive:false});
  new ResizeObserver(resize).observe(viewport);window.addEventListener('resize',resize);
- window.desk3D={startVerdictMotion,setChapelDraftMaterials,setChapel4kMaterials,seatedDebug:()=>({playerCount,seatedVisible}),setSeatedVisible(n){seatedVisible=Math.max(0,Math.min(8,Number(n)||0));layoutPlayers();renderFrame();return seatedVisible;},setFurniture,furnitureState,auditOpenings:()=>roomEnvironment.auditOpenings(),clearVerdictMotion,setCast(count,mode){if(!Number.isInteger(count)||count<4||count>8||!['light','table'].includes(mode))throw Error('invalid cast configuration');clearVerdictMotion();playerCount=count;focusMode=mode;spin=null;turntable.rotation.y=0;layoutPlayers();clearExploration();current={...desired(view,Math.min(role,count-1))};renderFrame();},sync(v,r,s,speaker=r){const was=stage,oldRole=role,oldView=view;stage=s;if(reduced.matches){roomMix=stage==='turn'?.66:stage==='read'?1:.85;activityMix=stage==='read'?0:1;activityWiden=(s==='discuss'||s==='accuse')?ACTIVITY_WIDEN:1;}if(!(s==='turn'&&focusMode==='light'&&was==='turn'&&speaker===speakingRole&&oldRole===r))switchView(s==='turn'?'first':v,r);if(s==='turn'&&(was!=='turn'||speaker!==speakingRole||oldRole!==r||oldView!=='first'))startSpeaker(speaker);else if(s!=='turn'&&was==='turn')restoreTable();if(s==='turn'||was==='turn'||was!==s||oldRole!==r)clearExploration();},audit:geometryAudit,explore(o){return exploreScene(o);},resetExplore(){return resetExplore();},snapshot(){return {view,role,stage,frame,playerCount,focusMode,environment:roomEnvironment.snapshot(),floorPattern:{style:window.__floorPattern||"rose",color:floorInlayMaterial.color.getHexString(),glow:floorGlow},lighting:lightingSnapshot(),exploration:explorationSnapshot(),lampOcclusionSuppressed,lamp:{suppressed:lampOcclusionSuppressed,blocksTable:lampBlocksTable,visible:lampParts.some(m=>m.visible)},interactive:interactiveTargets(),activityMix,framing:{w:framingInfo.w,h:framingInfo.h,band:{...framingInfo.band},plates:framingInfo.plates.map(p=>({...p})),actors:framingInfo.actors.map(a=>({...a}))},settings:{...settings},turntable:{angle:turntable.rotation.y,rotating:!!spin,id:spinSerial,trace:spinTrace.slice(-400),speaker:speakerState()},transitioning:!!anim,camera:cameraState(),cameraPath:cameraPath.slice(-160),rotationProfile:{kind:focusMode==='light'?'stationary spotlight':'shortest table rotation',fastMs:800,settleMs:settings.spinMs-800},spinProfile:{fastMs:800,settleMs:settings.spinMs-800},trace:trace.slice(-160),renderCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles};},configure(patch){if(!patch||typeof patch!=='object'||Array.isArray(patch))throw Error('invalid parameter object');for(const [key,value] of Object.entries(patch)){if(!limits[key]||!Number.isFinite(value)||value<limits[key][0]||value>limits[key][1])throw Error('parameter out of range: '+key);}Object.assign(settings,patch);switchView(view,role);renderFrame();return {...settings};},resetParameters(){Object.assign(settings,defaults);switchView(view,role);renderFrame();return {...settings};},inspectionAngle(elevation){if(!Number.isFinite(elevation)||elevation<-.10||elevation>1.57)throw Error('invalid inspection elevation');anim=null;current.elev=elevation;renderFrame();},capture(){renderFrame();return renderer.domElement.toDataURL('image/png');}};
+ window.desk3D={refinedSnapshot(){return {...actors[0].body.userData.inspectRefined(),screenBounds:refinedScreenBounds()};},emoteSample:triggerSampleEmote,seatSampleSnapshot:sampleSeatSnapshot,startVerdictMotion,setChapelDraftMaterials,setChapel4kMaterials,seatedDebug:()=>({playerCount,seatedVisible}),setSeatedVisible(n){seatedVisible=Math.max(0,Math.min(8,Number(n)||0));layoutPlayers();renderFrame();return seatedVisible;},setFurniture,furnitureState,auditOpenings:()=>roomEnvironment.auditOpenings(),clearVerdictMotion,setCast(count,mode){if(!Number.isInteger(count)||count<4||count>8||!['light','table'].includes(mode))throw Error('invalid cast configuration');clearVerdictMotion();playerCount=count;focusMode=mode;spin=null;turntable.rotation.y=0;layoutPlayers();clearExploration();current={...desired(view,Math.min(role,count-1))};renderFrame();},sync(v,r,s,speaker=r){const was=stage,oldRole=role,oldView=view;stage=s;if(reduced.matches){roomMix=stage==='turn'?.66:stage==='read'?1:.85;activityMix=stage==='read'?0:1;activityWiden=(s==='discuss'||s==='accuse')?ACTIVITY_WIDEN:1;}if(!(s==='turn'&&focusMode==='light'&&was==='turn'&&speaker===speakingRole&&oldRole===r))switchView(s==='turn'?'first':v,r);if(s==='turn'&&(was!=='turn'||speaker!==speakingRole||oldRole!==r||oldView!=='first'))startSpeaker(speaker);else if(s!=='turn'&&was==='turn')restoreTable();if(s==='turn'||was==='turn'||was!==s||oldRole!==r)clearExploration();},audit:geometryAudit,explore(o){return exploreScene(o);},resetExplore(){return resetExplore();},snapshot(){return {view,role,stage,frame,playerCount,focusMode,environment:roomEnvironment.snapshot(),floorPattern:{style:window.__floorPattern||"rose",color:floorInlayMaterial.color.getHexString(),glow:floorGlow},lighting:lightingSnapshot(),exploration:explorationSnapshot(),lampOcclusionSuppressed,lamp:{suppressed:lampOcclusionSuppressed,blocksTable:lampBlocksTable,visible:lampParts.some(m=>m.visible)},interactive:interactiveTargets(),activityMix,framing:{w:framingInfo.w,h:framingInfo.h,band:{...framingInfo.band},plates:framingInfo.plates.map(p=>({...p})),actors:framingInfo.actors.map(a=>({...a}))},settings:{...settings},turntable:{angle:turntable.rotation.y,rotating:!!spin,id:spinSerial,trace:spinTrace.slice(-400),speaker:speakerState()},transitioning:!!anim,camera:cameraState(),cameraPath:cameraPath.slice(-160),rotationProfile:{kind:focusMode==='light'?'stationary spotlight':'shortest table rotation',fastMs:800,settleMs:settings.spinMs-800},spinProfile:{fastMs:800,settleMs:settings.spinMs-800},trace:trace.slice(-160),renderCalls:renderer.info.render.calls,triangles:renderer.info.render.triangles};},configure(patch){if(!patch||typeof patch!=='object'||Array.isArray(patch))throw Error('invalid parameter object');for(const [key,value] of Object.entries(patch)){if(!limits[key]||!Number.isFinite(value)||value<limits[key][0]||value>limits[key][1])throw Error('parameter out of range: '+key);}Object.assign(settings,patch);switchView(view,role);renderFrame();return {...settings};},resetParameters(){Object.assign(settings,defaults);switchView(view,role);renderFrame();return {...settings};},inspectionAngle(elevation){if(!Number.isFinite(elevation)||elevation<-.10||elevation>1.57)throw Error('invalid inspection elevation');anim=null;current.elev=elevation;renderFrame();},capture(){renderFrame();return renderer.domElement.toDataURL('image/png');}};
  const initial=(window.deskPrototype&&window.deskPrototype.state&&window.deskPrototype.state())||{stage:'read',camera:'god',currentRole:0};stage=initial.stage||'read';switchView(initial.camera||'god',initial.currentRole||0,true);document.documentElement.dataset.sceneReady='true';
 }catch(error){viewport.textContent='3D场景未能加载：'+error.message;document.documentElement.dataset.sceneError=error.message;console.error(error);}

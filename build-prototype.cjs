@@ -1,10 +1,10 @@
 'use strict';
 // The only published prototype: all pages and one WebGL canvas in a single file.
 const fs=require('node:fs'),path=require('node:path'),root=__dirname,ids=new Map(),sources=new Map();
-function assign(abs){if(ids.has(abs))return ids.get(abs);const id='#app-scene-'+(ids.size+1);ids.set(abs,id);sources.set(id,null);let c=fs.readFileSync(abs,'utf8');c=require('./sample-lighting-transform.cjs')(c,path.basename(abs));c=require('./immersive-scene-transform.cjs')(c,path.basename(abs));c=require('./refined-puppet-transform.cjs')(c,path.basename(abs));const replace=(m,h,q,rel)=>`${h}${q}${assign(path.resolve(path.dirname(abs),rel))}${q}`;c=c.replace(/(\bfrom\s*)(['"])(\.{1,2}\/[^'"]+)\2/g,replace).replace(/(\bimport\s*)(['"])(\.{1,2}\/[^'"]+)\2/g,replace);sources.set(id,c);return id;}
+function assign(abs){if(ids.has(abs))return ids.get(abs);const id='#app-scene-'+(ids.size+1);ids.set(abs,id);sources.set(id,null);let c=fs.readFileSync(abs,'utf8');const replace=(m,h,q,rel)=>`${h}${q}${assign(path.resolve(path.dirname(abs),rel))}${q}`;c=c.replace(/(\bfrom\s*)(['"])(\.{1,2}\/[^'"]+)\2/g,replace).replace(/(\bimport\s*)(['"])(\.{1,2}\/[^'"]+)\2/g,replace);sources.set(id,c);return id;}
 const sourcePath=path.join(root,'样板源码','围桌.source.html');
 let html=fs.readFileSync(sourcePath,'utf8');
-html=html.replace('__BUBBLE_CSS__',()=>fs.readFileSync(path.join(root,'bubble-room-sample.css'),'utf8')+'\n'+fs.readFileSync(path.join(root,'unified-prototype.css'),'utf8'));
+html=html.replace('__BUBBLE_CSS__',()=>fs.readFileSync(path.join(root,'bubble-room-sample.css'),'utf8')+'\n'+fs.readFileSync(path.join(root,'unified-prototype.css'),'utf8')+'\n'+fs.readFileSync(path.join(root,'mobile-hud.css'),'utf8'));
 html=html.replace(/<script type="module" src="\.\/([^"]+)"><\/script>/g,(_,rel)=>`<script type="module">import '${assign(path.join(root,rel))}';</script>`);
 const imports={};for(const[id,c]of sources)imports[id]='data:text/javascript;base64,'+Buffer.from(c).toString('base64');html=html.replace('<script type="module">','<script type="importmap">'+JSON.stringify({imports})+'</script><script type="module">');
 for(const file of ['mock-background-music.js','bubble-room-sample.js','unified-prototype.js']){let c=fs.readFileSync(path.join(root,file),'utf8');if(file==='unified-prototype.js')c=c.replace('__PUPPET_IMAGE__','data:image/png;base64,'+fs.readFileSync(path.join(root,'人物概念样片','角色01_木偶版_1K.png')).toString('base64'));html=html.replace(`<script src="./${file}"></script>`,()=>'<script>'+c+'</script>');}
@@ -24,6 +24,6 @@ html=html.replace('</body>',()=>'<script>'+fs.readFileSync(path.join(root,'lobby
 html=html.replace('</body>',()=>'<script>'+fs.readFileSync(path.join(root,'usb-room-client.js'),'utf8')+'</script></body>');
 html=html.replace('</head>',()=>'<style>'+fs.readFileSync(path.join(root,'assets/book-covers/cinema-layout.css'),'utf8')+'</style></head>');
 const draftAssets=Object.fromEntries(['limestone','dark-oak','antique-brass'].flatMap(name=>{const file=path.join(root,'assets','chapel-materials',name+'.webp');return fs.existsSync(file)?[[name,'data:image/webp;base64,'+fs.readFileSync(file).toString('base64')]]:[];}));
-html=html.replace('</body>',()=>'<script type="application/json" id="chapel-draft-assets">'+safe(draftAssets)+'</script><script>'+fs.readFileSync(path.join(root,'chapel-direct-preview.js'),'utf8')+'</script></body>');
+html=html.replace('</body>',()=>'<script type="application/json" id="chapel-draft-assets">'+safe(draftAssets)+'</script></body>');
 html=html.replace('</body>',()=>'<script>'+fs.readFileSync(path.join(root,'desktop-controller.js'),'utf8')+'</script></body>');
 const target=path.join(root,'围桌样板.html');fs.writeFileSync(target,html);console.log(`UNIFIED PROTOTYPE BUILT / one HTML / ${sources.size} shared scene modules / ${fs.statSync(target).size} bytes / home + room + immersive + gestures + music + concept / local M4A assets loaded on demand`);
