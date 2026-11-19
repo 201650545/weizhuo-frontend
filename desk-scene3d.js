@@ -36,17 +36,29 @@ function sampleRig(index){
 }
 function resetSamplePose(index){const r=sampleRig(index);r.body.rotation.copy(r.bodyRotation);r.body.position.y=r.bodyY;r.head.rotation.copy(r.headRotation);r.left.rotation.copy(r.leftRotation);r.right.rotation.copy(r.rightRotation);}
 function sampleSeatSnapshot(){const project=name=>{const o=scene?.getObjectByName(name);if(!o)return null;const p=o.getWorldPosition(new THREE.Vector3()).project(camera);return {x:p.x,y:p.y,z:p.z};};const seat=window.__seatImmersion?.seat??0;const actorProjection=actors.filter(a=>a.index<playerCount&&a.index!==seat).map(a=>{const p=a.g.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0,1.45,0)).project(camera);return {index:a.index,x:p.x,y:p.y,z:p.z};});const floor=scene?.getObjectByName('floor-design-options');const selected=floor?.children.find(o=>o.visible);const probe=new THREE.Raycaster(new THREE.Vector3(3,4,0),new THREE.Vector3(0,-1,0));const floorHit=probe.intersectObjects([selected,scene?.getObjectByName('floor')].filter(Boolean),false)[0];return {floorVisibility:{selected:selected?.name,y:selected?.getWorldPosition(new THREE.Vector3()).y,firstSurface:floorHit?.object.name},castVisibility:actors.filter(a=>a.index<playerCount).map(a=>({index:a.index,seatVisible:a.g.visible,bodyVisible:a.body.visible})),verticalFov:camera?.fov,horizontalFov:THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov)/2)*camera.aspect)),actorProjection,windowProjection:{centre:project('circular-window'),moon:project('moon-outside-window')},enabled:!!window.__seatImmersion?.enabled,seat:window.__seatImmersion?.seat??0,cameraPosition:camera?.position.toArray(),ownVisible:!!actors[window.__seatImmersion?.seat??0]?.g.visible,activeEmote:sampleEmote?{index:sampleEmote.index,kind:sampleEmote.kind,elapsed:performance.now()-sampleEmote.start}:null,emotePose:sampleLastEmote?{head:sampleRig(sampleLastEmote.index).head.rotation.toArray().slice(0,3),bodyY:sampleRig(sampleLastEmote.index).body.position.y,right:sampleRig(sampleLastEmote.index).right.rotation.toArray().slice(0,3)}:null,lastEmote:sampleLastEmote};}
+let seatRig=null,seatRigOptions=null,seatRigKey='',seatRigYaw=0,seatRigPitch=0;
+// The seat view is owned by the shared camera controller: one preset anchor per seat,
+// incremental yaw/pitch, damped placement and the same room bounds as the director camera.
+function seatCameraRig(cfg){
+ const seat=Math.min(playerCount-1,Math.max(0,cfg.seat||0)),key=seat+'/'+playerCount;
+ if(seatRigKey===key&&seatRig)return seatRig;
+ const anchor=actors[seat].g.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0,1.63,0));
+ seatRigOptions={presets:{firstPerson:{position:anchor.toArray(),target:[0,1.46,0],fov:78}},fovScale:1};
+ seatRig=createCameraController(camera,roomEnvironment.snapshot().bounds,seatRigOptions);
+ seatRig.setMode('firstPerson');seatRigKey=key;seatRigYaw=0;seatRigPitch=0;
+ return seatRig;
+}
 function applySeatedSample(){
  const cfg=window.__seatImmersion;
   const shot=window.__chapelStudyCamera;
   if(shot){camera.position.set(...shot.eye);camera.lookAt(...shot.target);camera.fov=shot.fov;camera.near=.045;camera.updateProjectionMatrix();camera.updateMatrixWorld();}
  for(const a of actors)a.g.visible=a.index<playerCount&&(!window.__roomLobby?.active||a.index<window.__roomLobby.joined)&&!(cfg?.enabled&&a.index===cfg.seat);
  if(cfg?.enabled){
-  const a=actors[Math.min(playerCount-1,Math.max(0,cfg.seat||0))],eye=a.g.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0,1.63,0));
-  camera.position.copy(eye);const center=new THREE.Vector3(0,1.46,0),dir=center.sub(eye).normalize();
-  const yaw=Number(cfg.yaw)||0,pitch=Number(cfg.pitch)||0;
-  dir.applyAxisAngle(new THREE.Vector3(0,1,0),yaw);const side=new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,1,0)).normalize();dir.applyAxisAngle(side,pitch);
-  camera.lookAt(eye.clone().addScaledVector(dir,3));const bounds=viewport.getBoundingClientRect();camera.aspect=bounds.width/Math.max(1,bounds.height);const fieldScale=THREE.MathUtils.clamp(Number(window.__roomFieldScale)||1,.75,1.25);camera.fov=THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(THREE.MathUtils.degToRad(78)/2)*fieldScale)); /* Natural vertical perspective; landscape reveals neighboring seats. */camera.near=.045;camera.updateProjectionMatrix();camera.updateMatrixWorld();
+  const rig=seatCameraRig(cfg),yaw=Number(cfg.yaw)||0,pitch=Number(cfg.pitch)||0;
+  rig.drag(yaw-seatRigYaw,pitch-seatRigPitch);seatRigYaw=yaw;seatRigPitch=pitch;
+  seatRigOptions.fovScale=THREE.MathUtils.clamp(Number(window.__roomFieldScale)||1,.75,1.5);
+  const bounds=viewport.getBoundingClientRect();camera.aspect=bounds.width/Math.max(1,bounds.height);camera.near=.045; /* Natural vertical perspective; landscape reveals neighboring seats. */
+  rig.update(1);
   updateLampOcclusion();
  }
  if(sampleEmote){
@@ -65,7 +77,7 @@ function applySeatedSample(){
 import { buildChapelArchitecture, buildFloorOrnaments } from './chapel-architecture.js';
 import * as THREE from './vendor/three.module.js';
 import { createLightingRig } from './lighting-rig.js';
-import { constrainCamera } from './camera-controller.js';
+import { constrainCamera, createCameraController } from './camera-controller.js';
 import { buildPuppet } from './puppet-builder.js';
 import { loadChapelDrafts, applyDraftSurface, loadChapel4kTextures } from './scene-materials.js';
 import { createSpeakerMotion, speakerMotionAt } from './spin-motion.mjs';
@@ -449,7 +461,7 @@ function updateLampOcclusion(){
  for(const m of lampParts)m.visible=!blocked;
  lampOcclusionSuppressed=blocked;
 }
-function renderFrame(){if(!ready)return;restoreRefinedInspection();floorGlow=THREE.MathUtils.lerp(floorGlow,spin?.speaker!==null&&!!spin?.travel?.valueOf()?1:0,.045);floorInlayMaterial.emissiveIntensity=.12+.22*floorGlow;const designs=scene.getObjectByName('floor-design-options');for(const g of designs.children){g.visible=g.name===(window.__floorPattern||'rose');g.material.color.copy(floorInlayMaterial.color);g.material.emissive.copy(floorInlayMaterial.emissive);g.material.emissiveIntensity=floorInlayMaterial.emissiveIntensity;}if(window.__floorPatternColor){floorInlayMaterial.color.set(window.__floorPatternColor);floorInlayMaterial.emissive.set(window.__floorPatternColor);}for(const a of actors){const lobby=window.__roomLobby; a.body.visible=!lobby?.active || a.index<lobby.joined; if(lobby?.active&&Array.isArray(lobby.roles)){const roleIndex=lobby.roles[a.index];const shades=[0xd9b580,0x8d9ba2,0xb19296,0x8d9d7d,0xb69b81];a.body.traverse(o=>{if(!o.isMesh||!o.name.includes('torso'))return;for(const m of (Array.isArray(o.material)?o.material:[o.material]))if(m.userData.focusBase&&roleIndex!=null)m.userData.focusBase.setHex(shades[roleIndex%shades.length]);});}const dim=1; /* Moonlight and bounce determine contrast, preserving material detail. */for(const m of a.localMaterials)m.color.copy(m.userData.focusBase).multiplyScalar(dim);}roomEnvironment.setVisibility(roomMix);scene.getObjectByName('activity-ballot').visible=stage==='accuse';renderer.toneMappingExposure=1.25*settings.roomBrightness*THREE.MathUtils.clamp(Number(window.__sceneBrightnessPercent??50)/50,.02,2);scene.updateMatrixWorld(true);updateCamera();updateLampOcclusion();if(!window.__seatImmersion?.enabled)positionUI();applySeatedSample();for(const actor of actors)actor.body.userData.tickRefined?.(performance.now()/1000);applyRefinedInspection();renderer.render(scene,camera);frame++;}
+function renderFrame(){if(!ready)return;restoreRefinedInspection();floorGlow=THREE.MathUtils.lerp(floorGlow,spin?.speaker!==null&&!!spin?.travel?.valueOf()?1:0,.045);floorInlayMaterial.emissiveIntensity=.12+.22*floorGlow;const designs=scene.getObjectByName('floor-design-options');for(const g of designs.children){g.visible=g.name===(window.__floorPattern||'rose');g.material.color.copy(floorInlayMaterial.color);g.material.emissive.copy(floorInlayMaterial.emissive);g.material.emissiveIntensity=floorInlayMaterial.emissiveIntensity;}if(window.__floorPatternColor){floorInlayMaterial.color.set(window.__floorPatternColor);floorInlayMaterial.emissive.set(window.__floorPatternColor);}for(const a of actors){const lobby=window.__roomLobby; a.body.visible=!lobby?.active || a.index<lobby.joined; if(lobby?.active&&Array.isArray(lobby.roles)){const roleIndex=lobby.roles[a.index];const shades=[0xd9b580,0x8d9ba2,0xb19296,0x8d9d7d,0xb69b81];a.body.traverse(o=>{if(!o.isMesh||!o.name.includes('torso'))return;for(const m of (Array.isArray(o.material)?o.material:[o.material]))if(m.userData.focusBase&&roleIndex!=null)m.userData.focusBase.setHex(shades[roleIndex%shades.length]);});}const dim=1; /* Moonlight and bounce determine contrast, preserving material detail. */for(const m of a.localMaterials)m.color.copy(m.userData.focusBase).multiplyScalar(dim);}roomEnvironment.setVisibility(roomMix);roomEnvironment.applyOptions?.();scene.getObjectByName('activity-ballot').visible=stage==='accuse';renderer.toneMappingExposure=1.25*settings.roomBrightness*THREE.MathUtils.clamp(Number(window.__sceneBrightnessPercent??50)/50,.02,2);scene.updateMatrixWorld(true);updateCamera();updateLampOcclusion();if(!window.__seatImmersion?.enabled)positionUI();applySeatedSample();for(const actor of actors)actor.body.userData.tickRefined?.(performance.now()/1000);applyRefinedInspection();renderer.render(scene,camera);frame++;}
 let verdictMotion=null;
 function clearVerdictMotion(){if(!verdictMotion)return;const b=actors[verdictMotion.target].body;b.position.y=verdictMotion.y;b.rotation.z=verdictMotion.z;verdictMotion=null;}
 function startVerdictMotion(target,result){if(!Number.isInteger(target)||target<0||target>=playerCount||!['correct','wrong'].includes(result))throw Error('invalid verdict');clearVerdictMotion();const b=actors[target].body;verdictMotion={target,result,start:performance.now(),y:b.position.y,z:b.rotation.z};if(reduced.matches){b.position.y=verdictMotion.y+(result==='correct'?.22:0);b.rotation.z=verdictMotion.z+(result==='correct'?-.12:0);verdictMotion.finished=true;renderFrame();}}

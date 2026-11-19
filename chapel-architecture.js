@@ -25,14 +25,17 @@ export function createChapelArchitecture() {
   const stone = new THREE.MeshStandardMaterial({ color: 0x555b62, roughness: 0.88, roughnessMap: stoneTexture, bumpMap: stoneTexture, bumpScale: 0.035 });
   const floorMaterial = new THREE.MeshStandardMaterial({ color: 0x363d43, roughness: 0.86 });
   const bounds = { halfWidth: 6.65, halfDepth: 6.85, floor: 0, ceiling: 11.5 };
+  const wallMeshes = new Map();
+  const createWallGeometry = shape => new THREE.ExtrudeGeometry(shape, { depth: 0.65, bevelEnabled: false, curveSegments: 24 });
   const wall = (name, shape, x, z, angle) => {
-    const geometry = new THREE.ExtrudeGeometry(shape, { depth: 0.65, bevelEnabled: false, curveSegments: 32 });
+    const geometry = createWallGeometry(shape);
     const mesh = new THREE.Mesh(geometry, stone);
     mesh.name = name;
     mesh.position.set(x, 0, z);
     mesh.rotation.y = angle;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    wallMeshes.set(name, mesh);
     root.add(mesh);
   };
   const rectangle = (width, height) => {
@@ -41,23 +44,53 @@ export function createChapelArchitecture() {
     shape.lineTo(width / 2, height); shape.lineTo(-width / 2, height); shape.closePath();
     return shape;
   };
-  const north = rectangle(13.3, 10.5);
-  const circular = new THREE.Path(); circular.absarc(0, 7.8, 1.65, 0, Math.PI * 2, true); north.holes.push(circular);
-  wall('north-wall', north, 0, -6.85, 0);
-  wall('south-wall', rectangle(13.3, 10.5), 0, 6.2, 0);
-  for (const side of [-1, 1]) {
+  // The round window radius follows the control desk's 70%–265% slider, 234% being the baseline.
+  const readOption = key => (typeof window === 'undefined' ? undefined : window[key]);
+  const windowRadius = () => 1.65 * THREE.MathUtils.clamp(Number(readOption('__chapelWindowScale')) || 2.34, 0.70, 2.65) / 2.34;
+  const northShape = radius => {
+    const shape = rectangle(13.3, 10.5);
+    const hole = new THREE.Path(); hole.absarc(0, 7.8, radius, 0, Math.PI * 2, true);
+    shape.holes.push(hole);
+    return shape;
+  };
+  const SIDE_HOLE = { lancet: 'lancet', round: 'round', flamboyant: 'flamboyant' };
+  const sideShape = style => {
     const shape = rectangle(13.7, 10.5);
     for (const x of [-3.8, 0, 3.8]) {
       const hole = new THREE.Path();
-      // Gothic pointed opening with two springing curves meeting at a real apex.
-      hole.moveTo(x - 0.75, 3); hole.lineTo(x - 0.75, 6.25);
-      hole.quadraticCurveTo(x - 0.72, 7.35, x, 8.15);
-      hole.quadraticCurveTo(x + 0.72, 7.35, x + 0.75, 6.25);
+      hole.moveTo(x - 0.75, 3);
+      if (style === 'round') {
+        // Romanesque round arch: straight jambs into a half-round head.
+        hole.lineTo(x - 0.75, 6.25);
+        hole.quadraticCurveTo(x - 0.75, 7.05, x, 7.05);
+        hole.quadraticCurveTo(x + 0.75, 7.05, x + 0.75, 6.25);
+      } else if (style === 'flamboyant') {
+        // Flamboyant ogee: the head swells then flicks into a taller apex.
+        hole.lineTo(x - 0.75, 5.95);
+        hole.bezierCurveTo(x - 0.64, 6.75, x - 0.22, 7.35, x, 8.45);
+        hole.bezierCurveTo(x + 0.22, 7.35, x + 0.64, 6.75, x + 0.75, 5.95);
+      } else {
+        // Gothic lancet: two springing curves meeting at a real apex.
+        hole.lineTo(x - 0.75, 6.25);
+        hole.quadraticCurveTo(x - 0.72, 7.35, x, 8.15);
+        hole.quadraticCurveTo(x + 0.72, 7.35, x + 0.75, 6.25);
+      }
       hole.lineTo(x + 0.75, 3); hole.closePath();
       shape.holes.push(hole);
     }
+    return shape;
+  };
+  const replaceWall = (name, shape) => {
+    const mesh = wallMeshes.get(name);
+    if (!mesh) return;
+    mesh.geometry.dispose();
+    mesh.geometry = createWallGeometry(shape);
+  };
+  wall('north-wall', northShape(windowRadius()), 0, -6.85, 0);
+  wall('south-wall', rectangle(13.3, 10.5), 0, 6.2, 0);
+  for (const side of [-1, 1]) {
     // Extrusion runs along positive X after rotation, so the west wall starts outside.
-    wall(side < 0 ? 'west-wall' : 'east-wall', shape, side < 0 ? -7.3 : 6.65, 0, Math.PI / 2);
+    wall(side < 0 ? 'west-wall' : 'east-wall', sideShape('lancet'), side < 0 ? -7.3 : 6.65, 0, Math.PI / 2);
   }
   const floor = new THREE.Mesh(new THREE.PlaneGeometry(13.3, 13.7), floorMaterial);
   floor.name = 'floor'; floor.rotation.x = -Math.PI / 2; floor.receiveShadow = true; root.add(floor);
@@ -71,6 +104,7 @@ export function createChapelArchitecture() {
   const glass = new THREE.Mesh(new THREE.CircleGeometry(1.6, 64), new THREE.MeshPhysicalMaterial({ color: 0xe0edff, transmission: 0.96, roughness: 0.06, transparent: true, opacity: 0.18, side: THREE.DoubleSide }));
   glass.name = 'north-glass'; glass.position.set(0, 7.8, -6.78); root.add(glass);
   const ring = new THREE.Mesh(new THREE.TorusGeometry(1.65, 0.12, 12, 64), stone);
+  ring.name = 'circular-window';
   ring.position.set(0, 7.8, -6.7); root.add(ring);
   const moon = new THREE.Mesh(new THREE.SphereGeometry(0.9, 32, 24), new THREE.MeshBasicMaterial({ color: 0xe5ebfa }));
   moon.name = 'moon-outside-window'; moon.position.set(0.6, 19, -20); root.add(moon);
@@ -101,11 +135,76 @@ export function createChapelArchitecture() {
     }
   }
   const bars = new THREE.Group(); bars.name = 'rose-tracery'; bars.position.set(0, 7.8, -6.65);
-  for (let i = 0; i < 8; i++) {
-    const spoke = new THREE.Mesh(new THREE.BoxGeometry(0.065, 3.1, 0.12), ribMaterial);
-    spoke.rotation.z = i * Math.PI / 4; bars.add(spoke);
-  }
+  // Five programmable tracery schemes share one group so the control desk really swaps geometry.
+  const buildTracery = (style, radius) => {
+    for (const child of [...bars.children]) { child.geometry.dispose(); bars.remove(child); }
+    const ratio = radius / 1.65;
+    const spoke = (count, length, width) => {
+      for (let i = 0; i < count; i++) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(width, length, 0.12), ribMaterial);
+        bar.rotation.z = i * Math.PI * 2 / count;
+        bars.add(bar);
+      }
+    };
+    const ringMesh = (r, tube) => {
+      bars.add(new THREE.Mesh(new THREE.TorusGeometry(r, tube, 8, 48), ribMaterial));
+    };
+    if (style === 'quatrefoil') {
+      for (let i = 0; i < 4; i++) {
+        const lobe = new THREE.Mesh(new THREE.TorusGeometry(0.62 * ratio, 0.075, 8, 40), ribMaterial);
+        lobe.position.set(Math.cos(i * Math.PI / 2) * 0.78 * ratio, Math.sin(i * Math.PI / 2) * 0.78 * ratio, 0);
+        bars.add(lobe);
+      }
+      ringMesh(1.52 * ratio, 0.06);
+    } else if (style === 'radial') {
+      spoke(12, 3.0 * ratio, 0.055);
+      ringMesh(1.05 * ratio, 0.05);
+    } else if (style === 'royal') {
+      spoke(8, 3.1 * ratio, 0.06);
+      for (const side of [-1, 1]) {
+        const petal = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.72 * ratio, 0.1), ribMaterial);
+        petal.position.set(side * 0.20 * ratio, 1.15 * ratio, 0);
+        petal.rotation.z = side * 0.55;
+        bars.add(petal);
+      }
+      ringMesh(0.42 * ratio, 0.05);
+    } else if (style === 'story') {
+      // Three tall narrative lights with two transoms.
+      for (const x of [-0.62, 0, 0.62]) {
+        const panel = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.85 * ratio, 0.1), ribMaterial);
+        panel.position.x = x * ratio;
+        bars.add(panel);
+      }
+      for (const y of [-0.55, 0.45]) {
+        const transom = new THREE.Mesh(new THREE.BoxGeometry(1.86 * ratio, 0.055, 0.1), ribMaterial);
+        transom.position.y = y * ratio;
+        bars.add(transom);
+      }
+      ringMesh(1.45 * ratio, 0.055);
+    } else {
+      spoke(8, 3.1 * ratio, 0.065);
+      for (let i = 0; i < 8; i++) {
+        const petal = new THREE.Mesh(new THREE.TorusGeometry(0.30 * ratio, 0.045, 6, 24), ribMaterial);
+        petal.position.set(Math.cos(i * Math.PI / 4) * 0.82 * ratio, Math.sin(i * Math.PI / 4) * 0.82 * ratio, 0);
+        bars.add(petal);
+      }
+    }
+  };
+  buildTracery('petals', windowRadius());
   root.add(bars);
+  // Four wall torches: switchable from the control desk, no shadow maps to keep phones cheap.
+  const torchGroup = new THREE.Group(); torchGroup.name = 'wall-torches';
+  const flameMaterial = new THREE.MeshBasicMaterial({ color: 0xffb457 });
+  for (const [x, z] of [[-5.4, -5.2], [5.4, -5.2], [-5.4, 5.2], [5.4, 5.2]]) {
+    const holder = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.075, 0.5, 8), ribMaterial);
+    holder.position.set(x, 2.9, z); torchGroup.add(holder);
+    const flame = new THREE.Mesh(new THREE.SphereGeometry(0.13, 10, 8), flameMaterial);
+    flame.scale.y = 1.7; flame.position.set(x, 3.28, z); torchGroup.add(flame);
+    const light = new THREE.PointLight(0xff9a4a, 1.2, 4.2, 2);
+    light.position.set(x, 3.3, z); torchGroup.add(light);
+  }
+  torchGroup.visible = readOption('__chapelTorches') !== false;
+  root.add(torchGroup);
   const night = new THREE.Group(); night.name = 'night-exterior';
   const sky = new THREE.Mesh(
     new THREE.SphereGeometry(36, 32, 16),
@@ -165,6 +264,65 @@ export function createChapelArchitecture() {
     night.add(crow);
   }
   root.add(night);
+  // Glass scheme panes sit inside the three side openings; hidden in the stone schemes.
+  const sideGlass = [];
+  for (const side of [-1, 1]) for (const z of [-3.8, 0, 3.8]) {
+    const pane = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 5.1), new THREE.MeshPhysicalMaterial({
+      color: 0xcfe3ff, transmission: 0.92, roughness: 0.12, transparent: true, opacity: 0.16, side: THREE.DoubleSide
+    }));
+    pane.name = 'side-glass';
+    pane.rotation.y = Math.PI / 2;
+    pane.position.set(side * 6.98, 5.6, z);
+    pane.visible = false;
+    root.add(pane);
+    sideGlass.push(pane);
+  }
+  // Control-desk options are polled once per frame; each path only rebuilds on change.
+  const applied = {
+    radius: windowRadius(),
+    tracery: 'petals',
+    side: 'lancet',
+    scheme: 'rose',
+    torches: torchGroup.visible
+  };
+  function applyOptions() {
+    const radius = windowRadius();
+    const tracery = ['petals', 'quatrefoil', 'radial', 'royal', 'story'].includes(readOption('__chapelTracery')) ? readOption('__chapelTracery') : 'petals';
+    const side = ['lancet', 'round', 'flamboyant'].includes(readOption('__chapelSideShape')) ? readOption('__chapelSideShape') : 'lancet';
+    const scheme = ['rose', 'glass', 'forest'].includes(readOption('__chapelWindowScheme')) ? readOption('__chapelWindowScheme') : 'rose';
+    const lit = readOption('__chapelTorches') !== false;
+    let resized = false;
+    if (Math.abs(radius - applied.radius) > 1e-4) {
+      applied.radius = radius;
+      replaceWall('north-wall', northShape(radius));
+      glass.scale.setScalar(radius / 1.6);
+      ring.scale.setScalar(radius / 1.65);
+      resized = true;
+    }
+    if (resized || tracery !== applied.tracery) {
+      applied.tracery = tracery;
+      buildTracery(tracery, radius);
+    }
+    if (side !== applied.side) {
+      applied.side = side;
+      replaceWall('east-wall', sideShape(side));
+      replaceWall('west-wall', sideShape(side));
+    }
+    if (scheme !== applied.scheme) {
+      applied.scheme = scheme;
+      const outdoor = scheme !== 'glass';
+      for (const obj of night.children) {
+        if (obj.name === 'bare-tree' || obj.name === 'outside-grass' || obj.name === 'perched-crow') obj.visible = outdoor;
+      }
+      for (const pane of sideGlass) pane.visible = !outdoor;
+      sky.material.color.setHex(scheme === 'forest' ? 0x06101f : 0x0b172b);
+      stars.material.size = scheme === 'forest' ? 0.14 : 0.09;
+    }
+    if (lit !== applied.torches) {
+      applied.torches = lit;
+      torchGroup.visible = lit;
+    }
+  }
   const originalStone = { map: stone.map, normalMap: stone.normalMap, roughnessMap: stone.roughnessMap, bumpMap: stone.bumpMap };
   const originalFloor = { map: floorMaterial.map, normalMap: floorMaterial.normalMap, roughnessMap: floorMaterial.roughnessMap };
   let activeDraft = null;
@@ -186,6 +344,7 @@ export function createChapelArchitecture() {
     root,
     bounds,
     setStone4k,
+    applyOptions,
     auditOpenings() {
       root.updateMatrixWorld(true);
       const ray = new THREE.Raycaster();
@@ -215,7 +374,15 @@ export function createChapelArchitecture() {
       root.visible = visibility > 0;
     },
     snapshot() {
-      return { name: root.name, bounds: { ...bounds }, visibility, style: 'intimate-gothic-chapel' };
+      return {
+        name: root.name,
+        bounds: { ...bounds },
+        visibility,
+        style: 'intimate-gothic-chapel',
+        options: { ...applied },
+        traceryParts: bars.children.length,
+        sideGlassVisible: sideGlass.some(pane => pane.visible)
+      };
     }
   };
 }

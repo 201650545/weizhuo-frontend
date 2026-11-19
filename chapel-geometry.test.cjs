@@ -36,7 +36,9 @@ global.document = {
   assert.ok(west.max.x <= -6.64 && west.min.x < -7.29, 'west wall extrudes outward');
   const glass = chapel.root.getObjectByName('north-glass');
   assert.ok(glass.material.transparent && glass.material.transmission > 0, 'transparent north glass');
-  assert.equal(chapel.root.getObjectByName('rose-tracery').children.length, 8);
+  const tracery = chapel.root.getObjectByName('rose-tracery');
+  assert.ok(tracery.children.filter(child => child.geometry?.type === 'BoxGeometry').length >= 8, 'eight radial spokes');
+  assert.ok(chapel.root.getObjectByName('wall-torches'), 'wall torches group');
   assert.ok(chapel.root.getObjectByName('vault'));
   const ribs = [], trees = [], crows = [];
   chapel.root.traverse(object => {
